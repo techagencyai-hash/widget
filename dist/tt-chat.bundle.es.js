@@ -2,7 +2,7 @@ var __defProp = Object.defineProperty;
 var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 /**
-* @vue/shared v3.5.43
+* @vue/shared v3.5.45
 * (c) 2018-present Yuxi (Evan) You and Vue contributors
 * @license MIT
 **/
@@ -59,24 +59,20 @@ const cacheStringFunction = (fn2) => {
   };
 };
 const camelizeRE = /-\w/g;
-const camelize = cacheStringFunction(
-  (str) => {
-    return str.replace(camelizeRE, (c) => c.slice(1).toUpperCase());
-  }
-);
+const camelize = /* @__PURE__ */ cacheStringFunction((str) => {
+  return str.replace(camelizeRE, (c) => c.slice(1).toUpperCase());
+});
 const hyphenateRE = /\B([A-Z])/g;
-const hyphenate = cacheStringFunction(
+const hyphenate = /* @__PURE__ */ cacheStringFunction(
   (str) => str.replace(hyphenateRE, "-$1").toLowerCase()
 );
-const capitalize = cacheStringFunction((str) => {
+const capitalize = /* @__PURE__ */ cacheStringFunction((str) => {
   return str.charAt(0).toUpperCase() + str.slice(1);
 });
-const toHandlerKey = cacheStringFunction(
-  (str) => {
-    const s = str ? `on${capitalize(str)}` : ``;
-    return s;
-  }
-);
+const toHandlerKey = /* @__PURE__ */ cacheStringFunction((str) => {
+  const s = str ? `on${capitalize(str)}` : ``;
+  return s;
+});
 const hasChanged = (value, oldValue) => !Object.is(value, oldValue);
 const invokeArrayFns = (fns, ...arg) => {
   for (let i = 0; i < fns.length; i++) {
@@ -164,7 +160,7 @@ function normalizeProps(props) {
   }
   return props;
 }
-const specialBooleanAttrs = `itemscope,allowfullscreen,formnovalidate,ismap,nomodule,novalidate,readonly`;
+const specialBooleanAttrs = `itemscope,allowfullscreen,disablepictureinpicture,disableremoteplayback,formnovalidate,ismap,nomodule,novalidate,playsinline,readonly`;
 const isSpecialBooleanAttr = /* @__PURE__ */ makeMap(specialBooleanAttrs);
 function includeBooleanAttr(value) {
   return !!value || value === "";
@@ -303,7 +299,7 @@ const stringifySymbol = (v, i = "") => {
   );
 };
 /**
-* @vue/reactivity v3.5.43
+* @vue/reactivity v3.5.45
 * (c) 2018-present Yuxi (Evan) You and Vue contributors
 * @license MIT
 **/
@@ -447,7 +443,11 @@ function getCurrentScope() {
 }
 function onScopeDispose(fn2, failSilently = false) {
   if (activeEffectScope) {
-    activeEffectScope.cleanups.push(fn2);
+    if (activeEffectScope.active) {
+      activeEffectScope.cleanups.push(fn2);
+    } else {
+      fn2();
+    }
   }
 }
 let activeSub;
@@ -1045,18 +1045,40 @@ const arrayInstrumentations = {
 };
 function iterator(self2, method, wrapValue) {
   const arr = shallowReadArray(self2);
-  const iter = arr[method]();
+  const methodFn = arr[method];
+  const iter = methodFn.call(arr);
   if (arr !== self2 && !/* @__PURE__ */ isShallow(self2)) {
-    iter._next = iter.next;
-    iter.next = () => {
-      const result = iter._next();
-      if (!result.done) {
-        result.value = wrapValue(result.value);
+    if (iter[Symbol.toStringTag] === "Array Iterator") {
+      const wrapped = Object.create(Object.getPrototypeOf(iter));
+      wrapped.next = () => wrapResult(iter.next(), wrapValue);
+      if (methodFn !== arrayProto[method]) {
+        Object.defineProperties(wrapped, {
+          return: {
+            get() {
+              const fn2 = iter.return;
+              return typeof fn2 === "function" ? fn2.bind(iter) : fn2;
+            }
+          },
+          throw: {
+            get() {
+              const fn2 = iter.throw;
+              return typeof fn2 === "function" ? fn2.bind(iter) : fn2;
+            }
+          }
+        });
       }
-      return result;
-    };
+      return wrapped;
+    }
+    iter._next = iter.next;
+    iter.next = () => wrapResult(iter._next(), wrapValue);
   }
   return iter;
+}
+function wrapResult(result, wrapValue) {
+  if (!result.done) {
+    result.value = wrapValue(result.value);
+  }
+  return result;
 }
 const arrayProto = Array.prototype;
 function apply(self2, method, fn2, thisArg, wrappedRetFn, args) {
@@ -1125,7 +1147,7 @@ function noTracking(self2, method, args = []) {
   return res;
 }
 const isNonTrackableKeys = /* @__PURE__ */ makeMap(`__proto__,__v_isRef,__isVue`);
-const builtInSymbols = new Set(
+const builtInSymbols = /* @__PURE__ */ new Set(
   /* @__PURE__ */ Object.getOwnPropertyNames(Symbol).filter((key) => key !== "arguments" && key !== "caller").map((key) => Symbol[key]).filter(isSymbol)
 );
 function hasOwnProperty(key) {
@@ -1447,6 +1469,8 @@ function createInstrumentationGetter(isReadonly2, shallow) {
       return !isReadonly2;
     } else if (key === "__v_isReadonly") {
       return isReadonly2;
+    } else if (key === "__v_isShallow") {
+      return shallow;
     } else if (key === "__v_raw") {
       return target;
     }
@@ -1854,9 +1878,11 @@ function watch$1(source, cb, options = EMPTY_OBJ) {
   if (once && cb) {
     const _cb = cb;
     cb = (...args) => {
-      const res = _cb(...args);
-      watchHandle();
-      return res;
+      try {
+        return _cb(...args);
+      } finally {
+        watchHandle();
+      }
     };
   }
   let oldValue = isMultiSource ? new Array(source.length).fill(INITIAL_WATCHER_VALUE) : INITIAL_WATCHER_VALUE;
@@ -1867,12 +1893,13 @@ function watch$1(source, cb, options = EMPTY_OBJ) {
     if (cb) {
       const newValue = effect2.run();
       if (immediateFirstRun || deep || forceTrigger || (isMultiSource ? newValue.some((v, i) => hasChanged(v, oldValue[i])) : hasChanged(newValue, oldValue))) {
-        if (cleanup) {
-          cleanup();
-        }
         const currentWatcher = activeWatcher;
-        activeWatcher = effect2;
+        pauseTracking();
         try {
+          if (cleanup) {
+            cleanup();
+          }
+          activeWatcher = effect2;
           const args = [
             newValue,
             // pass undefined as the old value when it's changed for the first time
@@ -1886,6 +1913,7 @@ function watch$1(source, cb, options = EMPTY_OBJ) {
           );
         } finally {
           activeWatcher = currentWatcher;
+          resetTracking();
         }
       }
     } else {
@@ -1958,7 +1986,7 @@ function traverse(value, depth = Infinity, seen) {
   return value;
 }
 /**
-* @vue/runtime-core v3.5.43
+* @vue/runtime-core v3.5.45
 * (c) 2018-present Yuxi (Evan) You and Vue contributors
 * @license MIT
 **/
@@ -2080,7 +2108,7 @@ function callWithAsyncErrorHandling(fn2, instance, type, args) {
     const res = callWithErrorHandling(fn2, instance, type, args);
     if (res && isPromise(res)) {
       res.catch((err) => {
-        handleError(err, instance, type);
+        handleError(err, instance, type, void 0, true);
       });
     }
     return res;
@@ -2093,7 +2121,7 @@ function callWithAsyncErrorHandling(fn2, instance, type, args) {
     return values;
   }
 }
-function handleError(err, instance, type, throwInDev = true) {
+function handleError(err, instance, type, throwInDev = true, isAsyncError = false) {
   const contextVNode = instance ? instance.vnode : null;
   const { errorHandler, throwUnhandledErrorInProduction } = instance && instance.appContext.config || EMPTY_OBJ;
   if (instance) {
@@ -2102,7 +2130,9 @@ function handleError(err, instance, type, throwInDev = true) {
     const errorInfo = `https://vuejs.org/error-reference/#runtime-${type}`;
     while (cur) {
       const errorCapturedHooks = cur.ec;
-      if (errorCapturedHooks) {
+      if (errorCapturedHooks && !cur.isUnmounted && // Async failures may outlive stopped scopes whose unmount effects
+      // are deferred or discarded by Suspense.
+      (!isAsyncError || cur.scope.active)) {
         for (let i = 0; i < errorCapturedHooks.length; i++) {
           if (errorCapturedHooks[i](err, exposedInstance, errorInfo) === false) {
             return;
@@ -2191,15 +2221,15 @@ function queuePostFlushCb(cb) {
   }
   queueFlush();
 }
-function flushPreFlushCbs(instance, seen, i = flushIndex + 1) {
+function flushPreFlushCbs(instance, minUid, seen, i = flushIndex + 1) {
   for (; i < queue.length; i++) {
     const cb = queue[i];
     if (cb && cb.flags & 2) {
-      if (instance && cb.id !== instance.uid) {
+      if (instance && cb.id !== instance.uid || minUid !== void 0 && !(cb.id >= minUid)) {
         continue;
       }
       queue.splice(i, 1);
-      i--;
+      i = instance ? i - 1 : flushIndex;
       if (cb.flags & 4) {
         cb.flags &= -2;
       }
@@ -2210,12 +2240,23 @@ function flushPreFlushCbs(instance, seen, i = flushIndex + 1) {
     }
   }
 }
-function flushPostFlushCbs(seen) {
+function flushPostFlushCbs(seen, skip, minUid = 0) {
   if (pendingPostFlushCbs.length) {
-    const deduped = [...new Set(pendingPostFlushCbs)].sort(
-      (a, b) => getId(a) - getId(b)
-    );
-    pendingPostFlushCbs.length = 0;
+    let cbs = pendingPostFlushCbs;
+    let kept = 0;
+    if (skip) {
+      cbs = [];
+      for (let i = 0; i < pendingPostFlushCbs.length; i++) {
+        const cb = pendingPostFlushCbs[i];
+        if (cb.i !== void 0 ? !cb.i || cb.i.uid < minUid : skip.has(cb)) {
+          pendingPostFlushCbs[kept++] = cb;
+        } else {
+          cbs.push(cb);
+        }
+      }
+    }
+    const deduped = [...new Set(cbs)].sort((a, b) => getId(a) - getId(b));
+    pendingPostFlushCbs.length = kept;
     if (activePostFlushCbs) {
       for (let i = 0; i < deduped.length; i++) {
         activePostFlushCbs.push(deduped[i]);
@@ -2233,6 +2274,22 @@ function flushPostFlushCbs(seen) {
     }
     activePostFlushCbs = null;
     postFlushIndex = 0;
+  }
+}
+let isFlushing = false;
+function flushOnAppMount(fn2, minUid) {
+  if (isFlushing) {
+    fn2();
+    return;
+  }
+  const queued = minUid === void 0 ? void 0 : new Set(pendingPostFlushCbs);
+  fn2();
+  isFlushing = true;
+  try {
+    flushPreFlushCbs(void 0, minUid);
+    flushPostFlushCbs(void 0, queued, minUid);
+  } finally {
+    isFlushing = false;
   }
 }
 const getId = (job) => job.id == null ? job.flags & 2 ? -1 : Infinity : job.id;
@@ -2338,12 +2395,31 @@ function withDirectives(vnode, directives) {
   return vnode;
 }
 function invokeDirectiveHook(vnode, prevVNode, instance, name) {
-  const bindings = vnode.dirs;
+  let hookVNode = vnode;
+  if (name === "beforeMount") {
+    vnode._mount = vnode;
+  } else if (name === "beforeUpdate") {
+    const mount = prevVNode && prevVNode._mount;
+    if (mount) {
+      mount._latest = vnode;
+      vnode._mount = mount;
+    }
+  } else if (name === "mounted") {
+    const latest = vnode._latest;
+    vnode._mount = vnode._latest = void 0;
+    if (latest) {
+      hookVNode = latest;
+      latest._mount = void 0;
+    }
+  }
+  const bindings = hookVNode.dirs;
   const oldBindings = prevVNode && prevVNode.dirs;
   for (let i = 0; i < bindings.length; i++) {
-    const binding = bindings[i];
+    let binding = bindings[i];
     if (oldBindings) {
       binding.oldValue = oldBindings[i].value;
+    } else if (name === "mounted" && binding.oldValue !== void 0) {
+      binding = extend({}, binding, { oldValue: void 0 });
     }
     let hook = binding.dir[name];
     if (hook) {
@@ -2351,7 +2427,7 @@ function invokeDirectiveHook(vnode, prevVNode, instance, name) {
       callWithAsyncErrorHandling(hook, instance, 8, [
         vnode.el,
         binding,
-        vnode,
+        hookVNode,
         prevVNode
       ]);
       resetTracking();
@@ -2412,6 +2488,7 @@ function doWatch(source, cb, options = EMPTY_OBJ) {
   let isPre = false;
   if (flush === "post") {
     baseWatchOptions.scheduler = (job) => {
+      job.i = instance;
       queuePostRenderEffect(job, instance && instance.suspense);
     };
   } else if (flush !== "sync") {
@@ -2689,7 +2766,11 @@ const TeleportImpl = {
 };
 function moveTeleport(vnode, container, parentAnchor, { o: { insert }, m: move }, moveType = 2) {
   if (moveType === 0) {
+    if (vnode.targetStart) {
+      insert(vnode.targetStart, container, parentAnchor);
+    }
     insert(vnode.targetAnchor, container, parentAnchor);
+    parentAnchor = vnode.targetAnchor;
   }
   const { el, anchor, shapeFlag, children, props } = vnode;
   const isReorder = moveType === 2;
@@ -2857,10 +2938,6 @@ const BaseTransitionPropsValidators = {
   onAfterAppear: TransitionHookValidator,
   onAppearCancelled: TransitionHookValidator
 };
-const recursiveGetSubtree = (instance) => {
-  const subTree = instance.subTree;
-  return subTree.component ? recursiveGetSubtree(subTree.component) : subTree;
-};
 const BaseTransitionImpl = {
   name: `BaseTransition`,
   props: BaseTransitionPropsValidators,
@@ -2886,19 +2963,17 @@ const BaseTransitionImpl = {
       if (!innerChild) {
         return emptyPlaceholder(child);
       }
-      let enterHooks = resolveTransitionHooks(
+      const enterHooks = resolveTransitionHooks(
         innerChild,
         rawProps,
         state,
-        instance,
-        // #11061, ensure enterHooks is fresh after clone
-        (hooks) => enterHooks = hooks
+        instance
       );
       if (innerChild.type !== Comment) {
         setTransitionHooks(innerChild, enterHooks);
       }
       let oldInnerChild = instance.subTree && getInnerChild$1(instance.subTree);
-      if (oldInnerChild && oldInnerChild.type !== Comment && !isSameVNodeType(oldInnerChild, innerChild) && recursiveGetSubtree(instance).type !== Comment) {
+      if (oldInnerChild && oldInnerChild.type !== Comment && !isSameVNodeType(oldInnerChild, innerChild) && getTransitionRoot(instance.subTree)) {
         let leavingHooks = resolveTransitionHooks(
           oldInnerChild,
           rawProps,
@@ -2911,7 +2986,17 @@ const BaseTransitionImpl = {
           leavingHooks.afterLeave = () => {
             state.isLeaving = false;
             if (!(instance.job.flags & 8)) {
-              instance.update();
+              if (instance.effect.flags & 2) {
+                const job = () => {
+                  if (!(instance.job.flags & 8)) {
+                    instance.update();
+                  }
+                };
+                job.i = instance;
+                queueJob(job);
+              } else {
+                instance.update();
+              }
             }
             delete leavingHooks.afterLeave;
             oldInnerChild = void 0;
@@ -2968,7 +3053,7 @@ function getLeavingNodesForType(state, vnode) {
   }
   return leavingVNodesCache;
 }
-function resolveTransitionHooks(vnode, props, state, instance, postClone) {
+function resolveTransitionHooks(vnode, props, state, instance) {
   const {
     appear,
     mode,
@@ -3024,8 +3109,15 @@ function resolveTransitionHooks(vnode, props, state, instance, postClone) {
         );
       }
       const leavingVNode = leavingVNodesCache[key];
-      if (leavingVNode && isSameVNodeType(vnode, leavingVNode) && leavingVNode.el[leaveCbKey]) {
-        leavingVNode.el[leaveCbKey]();
+      if (leavingVNode && isSameVNodeType(vnode, leavingVNode)) {
+        let leavingCb = leavingVNode.el[leaveCbKey];
+        if (!leavingCb) {
+          const leavingRoot = getTransitionRoot(leavingVNode);
+          leavingCb = leavingRoot && leavingRoot.el[leaveCbKey];
+        }
+        if (leavingCb) {
+          leavingCb();
+        }
       }
       callHook2(hook, [el]);
     },
@@ -3100,15 +3192,21 @@ function resolveTransitionHooks(vnode, props, state, instance, postClone) {
       }
     },
     clone(vnode2) {
-      const hooks2 = resolveTransitionHooks(
-        vnode2,
-        props,
-        state,
-        instance,
-        postClone
-      );
-      if (postClone) postClone(hooks2);
-      return hooks2;
+      const cloned = resolveTransitionHooks(vnode2, props, state, instance);
+      cloned.afterLeave = () => {
+        if (hooks.afterLeave) hooks.afterLeave();
+      };
+      cloned.delayLeave = (el, earlyRemove, delayedLeave) => {
+        if (hooks.delayLeave) {
+          hooks.delayLeave(el, earlyRemove, delayedLeave);
+        } else {
+          delayedLeave();
+        }
+      };
+      cloned.delayedLeave = () => {
+        if (hooks.delayedLeave) hooks.delayedLeave();
+      };
+      return cloned;
     }
   };
   return hooks;
@@ -3149,10 +3247,24 @@ function setTransitionHooks(vnode, hooks) {
       hooks
     );
   } else if (vnode.shapeFlag & 128) {
-    vnode.ssContent.transition = hooks.clone(vnode.ssContent);
-    vnode.ssFallback.transition = hooks.clone(vnode.ssFallback);
+    const suspense = vnode.suspense;
+    if (suspense) {
+      const branch = suspense.isHydrating ? suspense.pendingBranch : suspense.activeBranch;
+      if (branch) {
+        setTransitionHooks(branch, hooks.clone(branch));
+      }
+    } else {
+      vnode.ssContent.transition = hooks.clone(vnode.ssContent);
+      vnode.ssFallback.transition = hooks.clone(vnode.ssFallback);
+    }
   } else {
     vnode.transition = hooks;
+    if (vnode.type === Fragment && isArray(vnode.children)) {
+      const child = filterSingleRoot(vnode.children, false);
+      if (child) {
+        setTransitionHooks(child, hooks);
+      }
+    }
   }
 }
 function getTransitionRawChildren(children, keepComment = false, parentKey) {
@@ -3176,6 +3288,18 @@ function getTransitionRawChildren(children, keepComment = false, parentKey) {
     }
   }
   return ret;
+}
+function getTransitionRoot(vnode) {
+  if (vnode.component) {
+    return getTransitionRoot(vnode.component.subTree);
+  }
+  if (vnode.type === Fragment) {
+    const child = isArray(vnode.children) && filterSingleRoot(vnode.children, false);
+    return child ? getTransitionRoot(child) : void 0;
+  }
+  if (vnode.type !== Comment) {
+    return vnode;
+  }
 }
 // @__NO_SIDE_EFFECTS__
 function defineComponent(options, extraOptions) {
@@ -3349,9 +3473,12 @@ function injectToKeepAliveRoot(hook, type, target, keepAliveRoot) {
     true
     /* prepend */
   );
-  onUnmounted(() => {
-    remove(keepAliveRoot[type], injected);
-  }, target);
+  const removal = injectHook(
+    "um",
+    () => remove(keepAliveRoot[type], injected),
+    target
+  );
+  removal.flags = 16;
 }
 function injectHook(type, hook, target = currentInstance, prepend = false) {
   if (target) {
@@ -3459,7 +3586,9 @@ function renderList(source, renderItem, cache, index) {
       );
     }
   } else if (typeof source === "number") {
-    {
+    if (!Number.isInteger(source) || source < 0) {
+      ret = [];
+    } else {
       ret = new Array(source);
       for (let i = 0; i < source; i++) {
         ret[i] = renderItem(i + 1, i, void 0, cached);
@@ -4375,6 +4504,24 @@ function renderComponentRoot(instance) {
   setCurrentRenderingInstance(prev);
   return result;
 }
+function filterSingleRoot(children, recurse = true) {
+  let singleRoot;
+  for (let i = 0; i < children.length; i++) {
+    const child = children[i];
+    if (isVNode(child)) {
+      if (child.type !== Comment || child.children === "v-if") {
+        if (singleRoot) {
+          return;
+        } else {
+          singleRoot = child;
+        }
+      }
+    } else {
+      return;
+    }
+  }
+  return singleRoot;
+}
 const getFunctionalFallthrough = (attrs) => {
   let res;
   for (const key in attrs) {
@@ -4444,7 +4591,7 @@ function hasPropsChanged(prevProps, nextProps, emitsOptions) {
   }
   for (let i = 0; i < nextKeys.length; i++) {
     const key = nextKeys[i];
-    if (hasPropValueChanged(nextProps, prevProps, key) && !isEmitListener(emitsOptions, key)) {
+    if (!hasOwn(prevProps, key) || hasPropValueChanged(nextProps, prevProps, key) && !isEmitListener(emitsOptions, key)) {
       return true;
     }
   }
@@ -5108,6 +5255,8 @@ function baseCreateRenderer(options, createHydrationFns) {
     const needCallTransitionHooks = needTransition(parentSuspense, transition);
     if (needCallTransitionHooks) {
       transition.beforeEnter(el);
+    } else if (transition && !transition.persisted) {
+      el[deferredEnterKey] = true;
     }
     hostInsert(el, container, anchor);
     if ((vnodeHook = props && props.onVnodeMounted) || needCallTransitionHooks || dirs) {
@@ -5253,15 +5402,16 @@ function baseCreateRenderer(options, createHydrationFns) {
     for (let i = 0; i < newChildren.length; i++) {
       const oldVNode = oldChildren[i];
       const newVNode = newChildren[i];
+      const oldEl = oldVNode.el || resolveAsyncComponentPlaceholder(oldVNode);
       const container = (
         // oldVNode may be an errored async setup() component inside Suspense
         // which will not have a mounted element
-        oldVNode.el && // - In the case of a Fragment, we need to provide the actual parent
+        oldEl && // - In the case of a Fragment, we need to provide the actual parent
         // of the Fragment itself so it can move its children.
         (oldVNode.type === Fragment || // - In the case of different nodes, there is going to be a replacement
         // which also requires the correct parent container
         !isSameVNodeType(oldVNode, newVNode) || // - In the case of a component, it could contain anything.
-        oldVNode.shapeFlag & (6 | 64 | 128)) ? hostParentNode(oldVNode.el) : (
+        oldVNode.shapeFlag & (6 | 64 | 128)) ? hostParentNode(oldEl) : (
           // In other cases, the parent container is not actually used so we
           // just pass the block element here to avoid a DOM parentNode call.
           fallbackContainer
@@ -5414,7 +5564,12 @@ function baseCreateRenderer(options, createHydrationFns) {
       setupComponent(instance, false, optimized);
     }
     if (instance.asyncDep) {
-      parentSuspense && parentSuspense.registerDep(instance, setupRenderEffect, optimized);
+      parentSuspense && parentSuspense.registerDep(
+        instance,
+        setupRenderEffect,
+        optimized,
+        namespace
+      );
       if (!initialVNode.el) {
         const placeholder = instance.subTree = createVNode(Comment);
         processCommentNode(null, placeholder, container, anchor);
@@ -5437,6 +5592,7 @@ function baseCreateRenderer(options, createHydrationFns) {
     if (shouldUpdateComponent(n1, n2, optimized)) {
       if (instance.asyncDep && !instance.asyncResolved) {
         n2.el = n1.el;
+        n2.placeholder = n1.placeholder;
         updateComponentPreRender(instance, n2, optimized);
         return;
       } else {
@@ -5445,6 +5601,7 @@ function baseCreateRenderer(options, createHydrationFns) {
       }
     } else {
       n2.el = n1.el;
+      n2.placeholder = n1.placeholder;
       instance.vnode = n2;
     }
   };
@@ -5500,16 +5657,23 @@ function baseCreateRenderer(options, createHydrationFns) {
       } else {
         let { next, bu, u, parent, vnode } = instance;
         {
-          const nonHydratedAsyncRoot = locateNonHydratedAsyncRoot(instance);
-          if (nonHydratedAsyncRoot) {
+          const unresolvedAsyncRoot = locateUnresolvedAsyncRoot(instance);
+          if (unresolvedAsyncRoot) {
             if (next) {
               next.el = vnode.el;
               updateComponentPreRender(instance, next, optimized);
             }
-            nonHydratedAsyncRoot.asyncDep.then(() => {
-              queuePostRenderEffect(() => {
-                if (!instance.isUnmounted) update();
-              }, parentSuspense);
+            unresolvedAsyncRoot.asyncDep.then(() => {
+              const retry = () => {
+                if (instance.job.flags & 8) return;
+                if (parentSuspense && parentSuspense.pendingBranch) {
+                  queuePostRenderEffect(retry, parentSuspense);
+                } else {
+                  update();
+                }
+              };
+              retry.flags = 16 | 32;
+              queuePostRenderEffect(retry, parentSuspense);
             });
             return;
           }
@@ -5536,8 +5700,11 @@ function baseCreateRenderer(options, createHydrationFns) {
         patch(
           prevTree,
           nextTree,
-          // parent may have changed if it's in a teleport
-          hostParentNode(prevTree.el),
+          // parent may have changed if it's in a teleport. a root that is a
+          // pending async component only has its placeholder comment
+          hostParentNode(
+            prevTree.el || resolveAsyncComponentPlaceholder(prevTree)
+          ),
           // anchor may have changed if it's in a fragment
           getNextHostNode(prevTree),
           instance,
@@ -5957,8 +6124,7 @@ function baseCreateRenderer(options, createHydrationFns) {
     if (cacheIndex != null && (!vnode.ctx || vnode.ctx === parentComponent)) {
       parentComponent.renderCache[cacheIndex] = void 0;
     }
-    if (shapeFlag & 256) {
-      parentComponent.ctx.deactivate(vnode);
+    if (shapeFlag & 256 && parentComponent.ctx.deactivate(vnode)) {
       return;
     }
     const shouldInvokeDirs = shapeFlag & 1 && dirs;
@@ -6019,10 +6185,9 @@ function baseCreateRenderer(options, createHydrationFns) {
   };
   const remove2 = (vnode) => {
     const { type, el, anchor, transition } = vnode;
-    if (type === Fragment) {
-      {
-        removeFragment(el, anchor);
-      }
+    const isFragment = type === Fragment;
+    if (isFragment && !transition) {
+      removeFragment(el, anchor);
       return;
     }
     if (type === Static) {
@@ -6032,17 +6197,25 @@ function baseCreateRenderer(options, createHydrationFns) {
       }
       return;
     }
+    const leavingNode = isFragment ? getTransitionRoot(vnode) : vnode;
     const performRemove = () => {
-      hostRemove(el);
+      if (isFragment) {
+        if (hostParentNode(el)) {
+          removeFragment(el, anchor);
+        }
+      } else {
+        hostRemove(el);
+      }
       if (transition && !transition.persisted && transition.afterLeave) {
         transition.afterLeave();
       }
     };
-    if (vnode.shapeFlag & 1 && transition && !transition.persisted) {
+    if (leavingNode && leavingNode.shapeFlag & 1 && transition && !transition.persisted) {
       const { leave, delayLeave } = transition;
-      const performLeave = () => leave(el, performRemove);
+      const leavingEl = leavingNode.el;
+      const performLeave = () => leave(leavingEl, performRemove);
       if (delayLeave) {
-        delayLeave(vnode.el, performRemove, performLeave);
+        delayLeave(leavingEl, performRemove, performLeave);
       } else {
         performLeave();
       }
@@ -6070,16 +6243,18 @@ function baseCreateRenderer(options, createHydrationFns) {
     if (job) {
       job.flags |= 8;
       unmount(subTree, instance, parentSuspense, doRemove);
-    } else if (instance.vnode.el && subTree) {
+    } else if (subTree) {
       subTree.transition = instance.vnode.transition;
       unmount(subTree, instance, parentSuspense, doRemove);
     }
     if (um) {
       queuePostRenderEffect(um, parentSuspense);
     }
-    queuePostRenderEffect(() => {
+    const markUnmounted = () => {
       instance.isUnmounted = true;
-    }, parentSuspense);
+    };
+    markUnmounted.flags = 16;
+    queuePostRenderEffect(markUnmounted, parentSuspense);
   };
   const unmountChildren = (children, parentComponent, parentSuspense, doRemove = false, optimized = false, start = 0) => {
     for (let i = start; i < children.length; i++) {
@@ -6097,32 +6272,26 @@ function baseCreateRenderer(options, createHydrationFns) {
     const teleportEnd = el && el[TeleportEndKey];
     return teleportEnd ? hostNextSibling(teleportEnd) : el;
   };
-  let isFlushing = false;
   const render2 = (vnode, container, namespace) => {
-    let instance;
-    if (vnode == null) {
-      if (container._vnode) {
-        unmount(container._vnode, null, null, true);
-        instance = container._vnode.component;
+    const minUid = vnode && container._vnode ? void 0 : vnode && vnode.component ? vnode.component.uid : getNextUid();
+    flushOnAppMount(() => {
+      if (vnode == null) {
+        if (container._vnode) {
+          unmount(container._vnode, null, null, true);
+        }
+      } else {
+        patch(
+          container._vnode || null,
+          vnode,
+          container,
+          null,
+          null,
+          null,
+          namespace
+        );
       }
-    } else {
-      patch(
-        container._vnode || null,
-        vnode,
-        container,
-        null,
-        null,
-        null,
-        namespace
-      );
-    }
-    container._vnode = vnode;
-    if (!isFlushing) {
-      isFlushing = true;
-      flushPreFlushCbs(instance);
-      flushPostFlushCbs();
-      isFlushing = false;
-    }
+      container._vnode = vnode;
+    }, minUid);
   };
   const internals = {
     p: patch,
@@ -6225,13 +6394,13 @@ function getSequence(arr) {
   }
   return result;
 }
-function locateNonHydratedAsyncRoot(instance) {
+function locateUnresolvedAsyncRoot(instance) {
   const subComponent = instance.subTree.component;
   if (subComponent) {
     if (subComponent.asyncDep && !subComponent.asyncResolved) {
       return subComponent;
     } else {
-      return locateNonHydratedAsyncRoot(subComponent);
+      return locateUnresolvedAsyncRoot(subComponent);
     }
   }
 }
@@ -6249,9 +6418,14 @@ function resolveAsyncComponentPlaceholder(anchorVnode) {
   if (instance) {
     return resolveAsyncComponentPlaceholder(instance.subTree);
   }
+  const suspense = anchorVnode.suspense;
+  if (suspense && suspense.activeBranch) {
+    return resolveAsyncComponentPlaceholder(suspense.activeBranch);
+  }
   return null;
 }
 const isSuspense = (type) => type.__isSuspense;
+const deferredEnterKey = /* @__PURE__ */ Symbol("_deferredEnter");
 function queueEffectWithSuspense(fn2, suspense) {
   if (suspense && suspense.pendingBranch) {
     if (isArray(fn2)) {
@@ -6439,7 +6613,8 @@ function _createVNode(type, props = null, children = null, patchFlag = 0, dynami
 }
 function guardReactiveProps(props) {
   if (!props) return null;
-  return /* @__PURE__ */ isProxy(props) || isInternalObject(props) ? extend({}, props) : props;
+  if (/* @__PURE__ */ isProxy(props)) return extend({}, props);
+  return isInternalObject(props) ? extend({}, props[rawAttrsKey] || props) : props;
 }
 function cloneVNode(vnode, extraProps, mergeRef = false, cloneTransition = false) {
   const { props, ref: ref3, patchFlag, children, transition } = vnode;
@@ -6610,8 +6785,11 @@ function invokeVNodeHook(hook, instance, vnode, prevVNode = null) {
     prevVNode
   ]);
 }
-const emptyAppContext = createAppContext();
+const emptyAppContext = /* @__PURE__ */ createAppContext();
 let uid = 0;
+function getNextUid() {
+  return uid;
+}
 function createComponentInstance(vnode, parent, suspense) {
   const type = vnode.type;
   const appContext = (parent ? parent.appContext : vnode.appContext) || emptyAppContext;
@@ -6787,7 +6965,8 @@ function setupStatefulComponent(instance, isSSR) {
             setInSSRSetupState(false);
           }
         }).catch((e) => {
-          handleError(e, instance, 0);
+          handleError(e, instance, 0, void 0, true);
+          instance.ssrRender = (_, push) => push("<!---->");
         });
       } else {
         instance.asyncDep = setupResult;
@@ -6827,10 +7006,11 @@ function finishComponentSetup(instance, isSSR, skipOptions) {
     }
   }
 }
+const rawAttrsKey = /* @__PURE__ */ Symbol();
 const attrsProxyHandlers = {
   get(target, key) {
     track(target, "get", "");
-    return target[key];
+    return key === rawAttrsKey ? target : target[key];
   }
 };
 function createSetupContext(instance) {
@@ -6923,9 +7103,9 @@ function h(type, propsOrChildren, children) {
     setBlockTracking(1);
   }
 }
-const version = "3.5.43";
+const version = "3.5.45";
 /**
-* @vue/runtime-dom v3.5.43
+* @vue/runtime-dom v3.5.45
 * (c) 2018-present Yuxi (Evan) You and Vue contributors
 * @license MIT
 **/
@@ -7396,7 +7576,9 @@ function patchStyle(el, prev, next) {
     }
   }
   if (vShowOriginalDisplay in el) {
-    el[vShowOriginalDisplay] = hasControlledDisplay ? style.display : "";
+    if (!isCssString || prev !== next) {
+      el[vShowOriginalDisplay] = hasControlledDisplay ? style.display : "";
+    }
     if (el[vShowHidden]) {
       style.display = "none";
     }
@@ -7856,18 +8038,18 @@ const vModelSelect = {
   },
   // set value in mounted & updated because <select> relies on its children
   // <option>s.
-  mounted(el, { value }) {
-    setSelected(el, value);
+  mounted(el, { value, modifiers: { number } }) {
+    setSelected(el, value, number);
   },
   beforeUpdate(el, { value }, vnode) {
     el._modelValue = value;
     el[assignKey] = getModelAssigner(vnode);
   },
-  updated(el, { value }) {
+  updated(el, { value, modifiers: { number } }) {
     const pending = el._pendingValue;
     el._pendingValue = void 0;
     if (!pending || pending[0] !== el.multiple || !isSameSelectValue(value, pending[1], pending[0])) {
-      setSelected(el, value);
+      setSelected(el, value, number);
     }
   }
 };
@@ -7883,7 +8065,7 @@ function isSameSelectValue(value, assignedValue, multiple) {
   }
   return false;
 }
-function setSelected(el, value) {
+function setSelected(el, value, number = false) {
   const isMultiple = el.multiple;
   const isArrayValue = isArray(value);
   if (isMultiple && !isArrayValue && !isSet(value)) {
@@ -7901,7 +8083,7 @@ function setSelected(el, value) {
           option.selected = looseIndexOf(value, optionValue) > -1;
         }
       } else {
-        option.selected = value.has(optionValue);
+        option.selected = value.has(optionValue) || number && typeof optionValue === "string" && value.has(looseToNumber(optionValue));
       }
     } else if (looseEqual(getValue(option), value)) {
       if (el.selectedIndex !== i) el.selectedIndex = i;
@@ -11561,95 +11743,120 @@ function list(state, startLine, endLine, silent) {
   }
   return true;
 }
+const MAX_LABEL_LENGTH = 999;
+function countCodePoints(str) {
+  let length = str.length;
+  for (let i = 0; i < str.length - 1; i++) {
+    const high = str.charCodeAt(i);
+    if (high < 55296 || high > 56319) {
+      continue;
+    }
+    const low = str.charCodeAt(i + 1);
+    if (low >= 56320 && low <= 57343) {
+      length--;
+      i++;
+    }
+  }
+  return length;
+}
+function lineEnd(state, line) {
+  return Math.min(state.eMarks[line] + 1, state.src.length);
+}
+function getNextLinePos(state, nextLine) {
+  const endLine = state.lineMax;
+  if (nextLine >= endLine || state.isEmpty(nextLine)) {
+    return -1;
+  }
+  let isContinuation = false;
+  if (state.sCount[nextLine] - state.blkIndent > 3) {
+    isContinuation = true;
+  }
+  if (state.sCount[nextLine] < 0) {
+    isContinuation = true;
+  }
+  if (!isContinuation) {
+    const terminatorRules = state.md.block.ruler.getRules("reference");
+    const oldParentType = state.parentType;
+    state.parentType = "reference";
+    let terminate = false;
+    for (let i = 0, l = terminatorRules.length; i < l; i++) {
+      if (terminatorRules[i](state, nextLine, endLine, true)) {
+        terminate = true;
+        break;
+      }
+    }
+    state.parentType = oldParentType;
+    if (terminate) {
+      return -1;
+    }
+  }
+  return state.bMarks[nextLine] + state.tShift[nextLine];
+}
 function reference(state, startLine, _endLine, silent) {
+  const src = state.src;
   let pos = state.bMarks[startLine] + state.tShift[startLine];
-  let max = state.eMarks[startLine];
   let nextLine = startLine + 1;
   if (state.sCount[startLine] - state.blkIndent >= 4) {
     return false;
   }
-  if (state.src.charCodeAt(pos) !== 91) {
+  if (src.charCodeAt(pos) !== 91) {
     return false;
   }
-  function getNextLine(nextLine2) {
-    const endLine = state.lineMax;
-    if (nextLine2 >= endLine || state.isEmpty(nextLine2)) {
-      return null;
-    }
-    let isContinuation = false;
-    if (state.sCount[nextLine2] - state.blkIndent > 3) {
-      isContinuation = true;
-    }
-    if (state.sCount[nextLine2] < 0) {
-      isContinuation = true;
-    }
-    if (!isContinuation) {
-      const terminatorRules = state.md.block.ruler.getRules("reference");
-      const oldParentType = state.parentType;
-      state.parentType = "reference";
-      let terminate = false;
-      for (let i = 0, l = terminatorRules.length; i < l; i++) {
-        if (terminatorRules[i](state, nextLine2, endLine, true)) {
-          terminate = true;
-          break;
-        }
-      }
-      state.parentType = oldParentType;
-      if (terminate) {
-        return null;
-      }
-    }
-    const pos2 = state.bMarks[nextLine2] + state.tShift[nextLine2];
-    const max2 = state.eMarks[nextLine2];
-    return state.src.slice(pos2, max2 + 1);
-  }
-  let str = state.src.slice(pos, max + 1);
-  max = str.length;
+  let max = lineEnd(state, startLine);
+  let rawLabel = "";
   let labelEnd = -1;
-  for (pos = 1; pos < max; pos++) {
-    const ch = str.charCodeAt(pos);
+  let segmentStart = ++pos;
+  while (pos < max) {
+    if (rawLabel.length + pos - segmentStart > MAX_LABEL_LENGTH * 2) {
+      return false;
+    }
+    let ch = src.charCodeAt(pos);
     if (ch === 91) {
       return false;
-    } else if (ch === 93) {
+    }
+    if (ch === 93) {
       labelEnd = pos;
       break;
-    } else if (ch === 10) {
-      const lineContent = getNextLine(nextLine);
-      if (lineContent !== null) {
-        str += lineContent;
-        max = str.length;
-        nextLine++;
-      }
-    } else if (ch === 92) {
-      pos++;
-      if (pos < max && str.charCodeAt(pos) === 10) {
-        const lineContent = getNextLine(nextLine);
-        if (lineContent !== null) {
-          str += lineContent;
-          max = str.length;
-          nextLine++;
-        }
-      }
     }
+    if (ch === 92) {
+      ch = src.charCodeAt(++pos);
+    }
+    if (ch === 10 && pos < max) {
+      const nextPos = getNextLinePos(state, nextLine);
+      if (nextPos < 0) {
+        return false;
+      }
+      rawLabel += src.slice(segmentStart, max);
+      pos = segmentStart = nextPos;
+      max = lineEnd(state, nextLine++);
+      continue;
+    }
+    pos++;
   }
-  if (labelEnd < 0 || str.charCodeAt(labelEnd + 1) !== 58) {
+  if (labelEnd < 0 || src.charCodeAt(labelEnd + 1) !== 58) {
     return false;
   }
-  for (pos = labelEnd + 2; pos < max; pos++) {
-    const ch = str.charCodeAt(pos);
+  rawLabel += src.slice(segmentStart, labelEnd);
+  if (rawLabel.length > MAX_LABEL_LENGTH && countCodePoints(rawLabel) > MAX_LABEL_LENGTH) {
+    return false;
+  }
+  pos = labelEnd + 2;
+  while (pos < max) {
+    const ch = src.charCodeAt(pos);
     if (ch === 10) {
-      const lineContent = getNextLine(nextLine);
-      if (lineContent !== null) {
-        str += lineContent;
-        max = str.length;
-        nextLine++;
+      const nextPos = getNextLinePos(state, nextLine);
+      if (nextPos < 0) {
+        break;
       }
-    } else if (isSpace(ch)) ;
-    else {
+      pos = nextPos;
+      max = lineEnd(state, nextLine++);
+    } else if (isSpace(ch)) {
+      pos++;
+    } else {
       break;
     }
   }
-  const destRes = state.md.helpers.parseLinkDestination(str, pos, max);
+  const destRes = state.md.helpers.parseLinkDestination(src, pos, max);
   if (!destRes.ok) {
     return false;
   }
@@ -11659,55 +11866,57 @@ function reference(state, startLine, _endLine, silent) {
   }
   pos = destRes.pos;
   const destEndPos = pos;
+  const destEndMax = max;
   const destEndLineNo = nextLine;
-  const start = pos;
-  for (; pos < max; pos++) {
-    const ch = str.charCodeAt(pos);
+  while (pos < max) {
+    const ch = src.charCodeAt(pos);
     if (ch === 10) {
-      const lineContent = getNextLine(nextLine);
-      if (lineContent !== null) {
-        str += lineContent;
-        max = str.length;
-        nextLine++;
+      const nextPos = getNextLinePos(state, nextLine);
+      if (nextPos < 0) {
+        break;
       }
-    } else if (isSpace(ch)) ;
-    else {
+      pos = nextPos;
+      max = lineEnd(state, nextLine++);
+    } else if (isSpace(ch)) {
+      pos++;
+    } else {
       break;
     }
   }
-  let titleRes = state.md.helpers.parseLinkTitle(str, pos, max);
+  const titleStart = pos;
+  let titleRes = state.md.helpers.parseLinkTitle(src, pos, max);
   while (titleRes.can_continue) {
-    const lineContent = getNextLine(nextLine);
-    if (lineContent === null) break;
-    str += lineContent;
-    pos = max;
-    max = str.length;
-    nextLine++;
-    titleRes = state.md.helpers.parseLinkTitle(str, pos, max, titleRes);
+    const nextPos = getNextLinePos(state, nextLine);
+    if (nextPos < 0) break;
+    pos = nextPos;
+    max = lineEnd(state, nextLine++);
+    titleRes = state.md.helpers.parseLinkTitle(src, pos, max, titleRes);
   }
   let title;
-  if (pos < max && start !== pos && titleRes.ok) {
+  if (titleStart !== destEndPos && titleRes.ok) {
     title = titleRes.str;
     pos = titleRes.pos;
   } else {
     title = "";
     pos = destEndPos;
+    max = destEndMax;
     nextLine = destEndLineNo;
   }
   while (pos < max) {
-    const ch = str.charCodeAt(pos);
+    const ch = src.charCodeAt(pos);
     if (!isSpace(ch)) {
       break;
     }
     pos++;
   }
-  if (pos < max && str.charCodeAt(pos) !== 10) {
+  if (pos < max && src.charCodeAt(pos) !== 10) {
     if (title) {
       title = "";
       pos = destEndPos;
+      max = destEndMax;
       nextLine = destEndLineNo;
       while (pos < max) {
-        const ch = str.charCodeAt(pos);
+        const ch = src.charCodeAt(pos);
         if (!isSpace(ch)) {
           break;
         }
@@ -11715,10 +11924,10 @@ function reference(state, startLine, _endLine, silent) {
       }
     }
   }
-  if (pos < max && str.charCodeAt(pos) !== 10) {
+  if (pos < max && src.charCodeAt(pos) !== 10) {
     return false;
   }
-  const label = normalizeReference(str.slice(1, labelEnd));
+  const label = normalizeReference(rawLabel);
   if (!label) {
     return false;
   }
@@ -11806,11 +12015,6 @@ const attr_value = "(?:" + unquoted + "|" + single_quoted + "|" + double_quoted 
 const attribute = "(?:\\s+" + attr_name + "(?:\\s*=\\s*" + attr_value + ")?)";
 const open_tag = "<[A-Za-z][A-Za-z0-9\\-]*" + attribute + "*\\s*\\/?>";
 const close_tag = "<\\/[A-Za-z][A-Za-z0-9\\-]*\\s*>";
-const comment = "<!---?>|<!--(?:[^-]|-[^-]|--[^>])*-->";
-const processing = "<[?][\\s\\S]*?[?]>";
-const declaration = "<![A-Za-z][^>]*>";
-const cdata = "<!\\[CDATA\\[[\\s\\S]*?\\]\\]>";
-const HTML_TAG_RE = new RegExp("^(?:" + open_tag + "|" + close_tag + "|" + comment + "|" + processing + "|" + declaration + "|" + cdata + ")");
 const HTML_OPEN_CLOSE_TAG_RE = new RegExp("^(?:" + open_tag + "|" + close_tag + ")");
 const HTML_SEQUENCES = [
   [/^<(script|pre|style|textarea)(?=(\s|>|$))/i, /<\/(script|pre|style|textarea)>/i, true],
@@ -12094,6 +12298,7 @@ function StateInline(src, md, env, outTokens) {
   this._prev_delimiters = [];
   this.backticks = {};
   this.backticksScanned = false;
+  this.skipHtmlSpecial = false;
   this.linkLevel = 0;
 }
 StateInline.prototype.pushPending = function() {
@@ -12856,6 +13061,41 @@ function isLetter(ch) {
   const lc = ch | 32;
   return lc >= 97 && lc <= 122;
 }
+function scanSpecial(state, pos) {
+  const src = state.src;
+  let start;
+  let terminator;
+  if (src.startsWith("<!--", pos)) {
+    if (src.startsWith(">", pos + 4)) {
+      return pos + 5;
+    }
+    if (src.startsWith("->", pos + 4)) {
+      return pos + 6;
+    }
+    start = pos + 4;
+    terminator = "-->";
+  } else if (src.startsWith("<![CDATA[", pos)) {
+    start = pos + 9;
+    terminator = "]]>";
+  } else if (src.charCodeAt(pos + 1) === 63) {
+    start = pos + 2;
+    terminator = "?>";
+  } else if (isLetter(src.charCodeAt(pos + 2))) {
+    start = pos + 3;
+    terminator = ">";
+  } else {
+    return -1;
+  }
+  if (state.skipHtmlSpecial) {
+    return -1;
+  }
+  const end = src.indexOf(terminator, start);
+  if (end < 0) {
+    state.skipHtmlSpecial = true;
+    return -1;
+  }
+  return end + terminator.length;
+}
 function html_inline(state, silent) {
   if (!state.md.options.html) {
     return false;
@@ -12865,21 +13105,26 @@ function html_inline(state, silent) {
   if (state.src.charCodeAt(pos) !== 60 || pos + 2 >= max) {
     return false;
   }
+  let end;
   const ch = state.src.charCodeAt(pos + 1);
-  if (ch !== 33 && ch !== 63 && ch !== 47 && !isLetter(ch)) {
+  if (ch === 33 || ch === 63) {
+    end = scanSpecial(state, pos);
+  } else if (ch === 47 || isLetter(ch)) {
+    const match3 = state.src.slice(pos).match(HTML_OPEN_CLOSE_TAG_RE);
+    end = match3 ? pos + match3[0].length : -1;
+  } else {
     return false;
   }
-  const match3 = state.src.slice(pos).match(HTML_TAG_RE);
-  if (!match3) {
+  if (end < 0) {
     return false;
   }
   if (!silent) {
     const token = state.push("html_inline", "", 0);
-    token.content = match3[0];
+    token.content = state.src.slice(pos, end);
     if (isLinkOpen(token.content)) state.linkLevel++;
     if (isLinkClose(token.content)) state.linkLevel--;
   }
-  state.pos += match3[0].length;
+  state.pos = end;
   return true;
 }
 const DIGITAL_RE = /^&#((?:x[a-f0-9]{1,6}|[0-9]{1,7}));/i;
